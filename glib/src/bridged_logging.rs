@@ -52,10 +52,12 @@ pub enum GlibLoggerDomain {
 /// Use this if you want to use glib as the main logging output in your application,
 /// and want to route all logging happening through the log crate to glib logging.
 /// If you want the opposite, see
-/// [`rust_log_handler`](fn.rust_log_handler.html).
+/// [`rust_log_handler`](fn.rust_log_handler.html) and
+/// [`rust_log_writer`](fn.rust_log_writer.html).
 ///
 /// NOTE: This should never be used when
-/// [`rust_log_handler`](fn.rust_log_handler.html) has
+/// [`rust_log_handler`](fn.rust_log_handler.html) or
+/// [`rust_log_writer`](fn.rust_log_writer.html) has
 /// been registered as a default glib log handler, otherwise a stack overflow
 /// will occur.
 ///
@@ -238,14 +240,14 @@ impl rs_log::Log for GlibLogger {
 }
 
 // rustdoc-stripper-ignore-next
-/// Provides a glib log handler which routes all logging messages to the
+/// Provides a glib log handler which routes all non-structured logging messages to the
 /// [`log crate`](https://crates.io/crates/log).
 ///
 /// In order to use this function, `glib` must be built with the `log` feature
 /// enabled.
 ///
 /// Use this function if you want to use the log crate as the main logging
-/// output in your application, and want to route all logging happening in
+/// output in your application, and want to route all non-structured logging happening in
 /// glib to the log crate. If you want the opposite, use [`GlibLogger`](struct.GlibLogger.html).
 ///
 /// NOTE: This should never be used when [`GlibLogger`](struct.GlibLogger.html) is
@@ -255,14 +257,71 @@ impl rs_log::Log for GlibLogger {
 /// glib::log_set_default_handler(glib::rust_log_handler);
 /// ```
 pub fn rust_log_handler(domain: Option<&str>, level: glib_log::LogLevel, message: &str) {
-    let level = match level {
+    let level = level_from_glib(level);
+    rs_log::log!(target: domain.unwrap_or("<null>"), level, "{}", message);
+}
+
+// rustdoc-stripper-ignore-next
+/// Provides a glib log handler which routes all structured logging messages to the
+/// [`log crate`](https://crates.io/crates/log).
+///
+/// In order to use this function, `glib` must be built with the `log` feature
+/// enabled.
+///
+/// Use this function if you want to use the log crate as the main logging
+/// output in your application, and want to route all structured logging happening in
+/// glib to the log crate. If you want the opposite, use [`GlibLogger`](struct.GlibLogger.html).
+///
+/// NOTE: This should never be used when [`GlibLogger`](struct.GlibLogger.html) is
+/// registered as a logger, otherwise a stack overflow will occur.
+///
+/// ```no_run
+/// glib::log_set_writer_func(glib::rust_log_writer);
+/// ```
+fn rust_log_writer(
+    level: glib_log::LogLevel,
+    fields: &[glib_log::LogField<'_>],
+) -> glib_log::LogWriterOutput {
+    let level = level_from_glib(level);
+
+    let mut message = None;
+    let mut domain = None;
+    let mut fields = fields.iter();
+    while let Some(f) = fields.next() {
+        match f.key() {
+            "MESSAGE" => {
+                message = f.value_str();
+                domain = fields
+                    .find(|f| f.key() == "GLIB_DOMAIN")
+                    .and_then(|f| f.value_str());
+                break;
+            }
+            "GLIB_DOMAIN" => {
+                domain = f.value_str();
+                message = fields
+                    .find(|f| f.key() == "MESSAGE")
+                    .and_then(|f| f.value_str());
+                break;
+            }
+            _ => (),
+        }
+    }
+
+    if let Some(message) = message {
+        rs_log::log!(target: domain.unwrap_or("<null>"), level, "{}", message);
+        LogWriterOutput::Handled
+    } else {
+        LogWriterOutput::Unhandled
+    }
+}
+
+fn level_from_glib(level: crate::LogLevel) -> rs_log::Level {
+    match level {
         glib_log::LogLevel::Error | glib_log::LogLevel::Critical => rs_log::Level::Error,
         glib_log::LogLevel::Warning => rs_log::Level::Warn,
         glib_log::LogLevel::Message | glib_log::LogLevel::Info => rs_log::Level::Info,
         glib_log::LogLevel::Debug => rs_log::Level::Debug,
-    };
-
-    rs_log::log!(target: domain.unwrap_or("<null>"), level, "{}", message);
+    }
 }
 
 // rustdoc-stripper-ignore-next
